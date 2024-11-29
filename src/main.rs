@@ -104,6 +104,7 @@ fn extract_archives(nanazip_path: &Path, package_dir: &Path, output_dir: &Path, 
             let mut cmd = Command::new(nanazip_path);
             cmd.current_dir(package_dir)
                .arg("x")
+               .arg("-y") // Force yes on all queries
                .arg(&archive_path)
                .arg(format!("-o{}", extract_dir.display()));
 
@@ -272,10 +273,15 @@ fn main() {
                     //==- Prompt for password and handle retries
                     let mut retry_mode = false;
                     loop {
-                        print!("\nEnter password for extraction ({}) ", 
-                            if retry_mode { "press Enter to skip package" } 
-                            else { "press Enter to use previous password" }
-                        );
+                        let prompt = if retry_mode {
+                            "Enter password for extraction (press Enter [on a blank entry] to skip this package)"
+                            } else if last_password.is_empty() {
+                                "Enter password for extraction"
+                            } else {
+                                "Enter password for extraction (press Enter [on a blank entry] to use previous password)"
+                            };
+                        
+                        print!("\n{}: ", prompt);
                         io::stdout().flush().unwrap();
                         let mut password = String::new();
                         io::stdin().read_line(&mut password).unwrap();
