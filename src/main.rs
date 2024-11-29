@@ -114,10 +114,14 @@ fn extract_archives(nanazip_path: &Path, package_dir: &Path, output_dir: &Path, 
             match cmd.output() {
                 Ok(output) => {
                     if !output.status.success() {
+                        let error_msg = String::from_utf8_lossy(&output.stderr);
+                        if error_msg.contains("Wrong password?") {
+                            return Err("Wrong password".into());
+                        }
                         return Err(format!(
                             "Failed to extract {}: {}", 
                             archive_path.display(),
-                            String::from_utf8_lossy(&output.stderr)
+                            error_msg
                         ).into());
                     }
                     println!("Extracted {} to {}", archive_path.display(), extract_dir.display());
@@ -265,23 +269,46 @@ fn main() {
                         }
                     }
 
-                    //==- Prompt for password
-                    print!("\nEnter password for extraction (press Enter to use previous password): ");
-                    io::stdout().flush().unwrap();
-                    let mut password = String::new();
-                    io::stdin().read_line(&mut password).unwrap();
-                    let password = password.trim();
-                    
-                    //==- Use previous password if empty
-                    let password = if password.is_empty() { &last_password } else { 
-                        last_password = password.to_string();
-                        &last_password
-                    };
+                    //==- Prompt for password and handle retries
+                    let mut retry_mode = false;
+                    loop {
+                        print!("\nEnter password for extraction ({}) ", 
+                            if retry_mode { "press Enter to skip package" } 
+                            else { "press Enter to use previous password" }
+                        );
+                        io::stdout().flush().unwrap();
+                        let mut password = String::new();
+                        io::stdin().read_line(&mut password).unwrap();
+                        let password = password.trim();
+                        
+                        let current_password = if !retry_mode && password.is_empty() {
+                            &last_password
+                        } else if password.is_empty() {
+                            println!("Skipping package due to empty password");
+                            break;
+                        } else {
+                            password
+                        };
 
-                    //==- Extract archives
-                    match extract_archives(&nanazip_path, &package_dl_dir, &package_output_dir, password) {
-                        Ok(_) => println!("Successfully extracted archives"),
-                        Err(e) => println!("Error extracting archives: {}", e),
+                        //==- Extract archives
+                        match extract_archives(&nanazip_path, &package_dl_dir, &package_output_dir, current_password) {
+                            Ok(_) => {
+                                println!("Successfully extracted archives");
+                                if !password.is_empty() {
+                                    last_password = password.to_string(); // Only save non-empty passwords if successful
+                                }
+                                break;
+                            },
+                            Err(e) => {
+                                if e.to_string() == "Wrong password" {
+                                    println!("Wrong password! Please try again, or press Enter to skip this package.");
+                                    retry_mode = true;
+                                    continue;
+                                }
+                                println!("Error extracting archives: {}", e);
+                                break;
+                            }
+                        }
                     }
 
                     //==- Clean up package download directory
