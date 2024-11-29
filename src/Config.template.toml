@@ -9,7 +9,8 @@ nanazip_exe = "../../nz/Nanazip.Console.exe"
 id = ""
 name = ""
 description = ""
-version_url = "https://" # Raw URL to file
-filelist_url = "https://" # Raw URL to file
-repo_url = "https://"
+version_url = "https://" #=-- Raw URL to file
+filelist_url = "https://" #=-- Raw URL to file
+repo_url = "https://" #=-- Raw URL to the folder with files
 output_path = ""
+password = "" #=-- The Archive's Password. Leave this empty for no password

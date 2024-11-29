@@ -78,7 +78,7 @@ fn should_update_package(current: Option<&Version>, new: &Version) -> Result<boo
                 io::stdin().read_line(&mut choice)?;
                 Ok(choice.trim().eq_ignore_ascii_case("Y"))
             } else {
-                Ok(true) //==- If current < new, it should update
+                Ok(true) //=-- If current < new, it should update
             }
         }
     }
@@ -128,7 +128,7 @@ fn get_base_name(filename: &str) -> Option<String> {
 }
 
 fn download_file(url: &str, target_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    //==- Create parent directories if they don't exist
+    //=-- Create parent directories if they don't exist
     if let Some(parent) = target_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -157,7 +157,7 @@ fn handle_output_dir(output_dir: &Path) -> Result<(), Box<dyn std::error::Error>
             fs::create_dir_all(output_dir)?;
             println!("Deleted and recreated output folder");
         } else {
-            //==- Default to overwrite (empty input or "O")
+            //=-- Default to overwrite (empty input or "O")
             println!("Will overwrite existing files");
         }
     } else {
@@ -167,7 +167,7 @@ fn handle_output_dir(output_dir: &Path) -> Result<(), Box<dyn std::error::Error>
 }
 
 fn extract_archives(nanazip_path: &Path, package_dir: &Path, output_dir: &Path, password: &str) -> Result<(), Box<dyn std::error::Error>> {
-    //==- Handle output directory first
+    //=-- Handle output directory first
     handle_output_dir(output_dir)?;
 
     let archives: Vec<_> = fs::read_dir(package_dir)?
@@ -188,7 +188,7 @@ fn extract_archives(nanazip_path: &Path, package_dir: &Path, output_dir: &Path, 
             let mut cmd = Command::new(nanazip_path);
             cmd.current_dir(package_dir)
                .arg("x")
-               .arg("-y") //==- Force yes on all queries
+               .arg("-y") //=-- Force yes on all queries
                .arg(&archive_path)
                .arg(format!("-o{}", extract_dir.display()));
 
@@ -211,7 +211,7 @@ fn extract_archives(nanazip_path: &Path, package_dir: &Path, output_dir: &Path, 
                     }
                     println!("Extracted {} to {}", archive_path.display(), extract_dir.display());
 
-                    //==- Move extracted files to output directory
+                    //=-- Move extracted files to output directory
                     fs::create_dir_all(output_dir)?;
                     for entry in fs::read_dir(&extract_dir)? {
                         let entry = entry?;
@@ -220,7 +220,7 @@ fn extract_archives(nanazip_path: &Path, package_dir: &Path, output_dir: &Path, 
                     }
                     println!("Moved files to {}", output_dir.display());
 
-                    //==- Clean up extraction directory
+                    //=-- Clean up extraction directory
                     fs::remove_dir_all(&extract_dir)?;
                 },
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -257,23 +257,23 @@ fn main() {
     println!("Looking for config at: {:?}", config_path);
 
     let settings: Settings = Config::builder()
-        //==- Override with local Config.toml next to executable
+        //=-- Override with local Config.toml next to executable
         .add_source(config::File::with_name(config_path.to_str().unwrap()).required(false))
-        //==- Add environment variable source with prefix WBTL
+        //=-- Add environment variable source with prefix WBTL
         .add_source(config::Environment::with_prefix("WBTL").separator("__"))
-          //==- Ex: WBTL_ARCHIVE__NANAZIP_EXE=path/to/nanazip.exe
-          //==- Ex: WBTL_PACKAGES__MYPACKAGE__OUTPUT_PATH=path/to/output
+          //=-- Ex: WBTL_ARCHIVE__NANAZIP_EXE=path/to/nanazip.exe
+          //=-- Ex: WBTL_PACKAGES__MYPACKAGE__OUTPUT_PATH=path/to/output
         .build()
         .unwrap()
         .try_deserialize()
         .unwrap();
 
-    //==- Get NanaZip path from config and resolve it relative to the executable directory
+    //=-- Get NanaZip path from config and resolve it relative to the executable directory
     let nanazip_relative_path = settings.archive.get("nanazip_exe")
         .expect("nanazip_exe not found in config");
     let nanazip_path = config_dir.join(nanazip_relative_path);
 
-    //==- Convert the packages to a sorted vec
+    //=-- Convert the packages to a sorted vec
     let mut package_vec: Vec<(&String, &Package)> = settings.packages.iter().collect();
     package_vec.sort_by(|a, b| a.1.name.cmp(&b.1.name));
 
@@ -282,14 +282,14 @@ fn main() {
         return;
     }
 
-    //==- Display numbered list
+    //=-- Display numbered list
     println!("\nAvailable packages:");
     println!("A. All packages");
     for (i, (_, package)) in package_vec.iter().enumerate() {
         println!("{}. {}: {}", i + 1, package.name, package.description);
     }
 
-    //==- Get user input from the console
+    //=-- Get user input from the console
     print!("\nSelect a package number (or A for all): ");
     io::stdout().flush().unwrap();
     let mut input = String::new();
@@ -297,11 +297,11 @@ fn main() {
     
     let input = input.trim();
     
-    //==- Parse selection
+    //=-- Parse selection
     let selected_index = if input.eq_ignore_ascii_case("a") || input.eq_ignore_ascii_case("all") {
-        None //==- All packages = None
+        None //=-- All packages = None
     } else {
-        //==- Parse and validate number, handling cases like "1." or "1.0"
+        //=-- Parse and validate number, handling cases like "1." or "1.0"
         let num = input.split('.').next().unwrap_or("").parse::<usize>();
         match num {
             Ok(num) if num > 0 && num <= package_vec.len() => Some(num - 1),
@@ -322,7 +322,7 @@ fn main() {
             }
         }
         
-        //==- Print version and check availability
+        //=-- Print version and check availability
         let is_available = match get_package_version_string(package) {
             Ok(version_string) => {
                 println!("{}", version_string);
@@ -334,9 +334,9 @@ fn main() {
             }
         };
 
-        //==- Only proceed with file listing if version was available
+        //=-- Only proceed with file listing if version was available
         if is_available {
-            //==- Get and print files
+            //=-- Get and print files
             println!("\n{} ({}) files:", package.name, package.id);
             match get_package_files(package) {
                 Ok(files) => {
@@ -349,7 +349,7 @@ fn main() {
                     let package_dl_dir = dl_dir.join(&package.id);
                     let package_output_dir = config_dir.join(&package.output_path);
 
-                    //==- Get and check version before downloading files
+                    //=-- Get and check version before downloading files
                     let version = match get_version(&package.version_url) {
                         Ok(v) => match Version::parse(&v) {
                             Ok(parsed) => parsed,
@@ -364,7 +364,7 @@ fn main() {
                         }
                     };
 
-                    //==- Check current version and prompt if needed
+                    //=-- Check current version and prompt if needed
                     let current_version = match get_current_version(&package_output_dir) {
                         Ok(v) => v,
                         Err(e) => {
@@ -399,7 +399,7 @@ fn main() {
                         let file_url = format!("{}{}", repo_url, file);
                         println!("{}", file_url);
                         
-                        //==- Transform filename and download
+                        //=-- Transform filename and download
                         if let Some(new_filename) = transform_filename(&file) {
                             let target_path = package_dl_dir.join(&new_filename);
                             match download_file(&file_url, &target_path) {
@@ -411,7 +411,7 @@ fn main() {
                         }
                     }
 
-                    //==- Prompt for password and handle retries
+                    //=-- Prompt for password and handle retries
                     let mut retry_mode = false;
                     loop {
                         let prompt = if retry_mode {
@@ -437,14 +437,14 @@ fn main() {
                             password
                         };
 
-                        //==- Extract archives
+                        //=-- Extract archives
                         match extract_archives(&nanazip_path, &package_dl_dir, &package_output_dir, current_password) {
                             Ok(_) => {
                                 println!("Successfully extracted archives");
                                 if !password.is_empty() {
-                                    last_password = password.to_string(); //==- Only save non-empty passwords if successful
+                                    last_password = password.to_string(); //=-- Only save non-empty passwords if successful
                                 }
-                                break; //==- Exit password retry loop on success
+                                break; //=-- Exit password retry loop on success
                             },
                             Err(e) => {
                                 println!("Error during extraction: {}", e);
@@ -454,12 +454,12 @@ fn main() {
                         }
                     }
 
-                    //==- Save version file after all archives are successfully extracted
+                    //=-- Save version file after all archives are successfully extracted
                     if let Err(e) = save_version_file(&version, &package_output_dir) {
                         println!("Warning: Failed to save version file: {}", e);
                     }
 
-                    //==- Clean up downloaded files
+                    //=-- Clean up downloaded files
                     if let Err(e) = cleanup_package_dir(&package_dl_dir) {
                         println!("Error cleaning up package directory: {}", e);
                     }
@@ -468,10 +468,10 @@ fn main() {
             }
         }
         
-        println!(); //==- Add a blank line between packages
+        println!(); //=-- Add a blank line between packages
     }
 
-    //==- Clean up main download directory
+    //=-- Clean up main download directory
     if let Err(e) = cleanup_package_dir(&dl_dir) {
         println!("Error cleaning up download directory: {}", e);
     }
