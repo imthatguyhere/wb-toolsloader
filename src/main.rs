@@ -68,7 +68,7 @@ fn get_base_name(filename: &str) -> Option<String> {
 }
 
 fn download_file(url: &str, target_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    // Create parent directories if they don't exist
+    //==- Create parent directories if they don't exist
     if let Some(parent) = target_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -148,7 +148,7 @@ fn main() {
         .try_deserialize()
         .unwrap();
 
-    // Get NanaZip path from config and resolve it relative to the executable directory
+    //==- Get NanaZip path from config and resolve it relative to the executable directory
     let nanazip_relative_path = settings.archive.get("nanazip_exe")
         .expect("nanazip_exe not found in config");
     let nanazip_path = config_dir.join(nanazip_relative_path);
@@ -179,9 +179,9 @@ fn main() {
     
     //==- Parse selection
     let selected_index = if input.eq_ignore_ascii_case("a") || input.eq_ignore_ascii_case("all") {
-        None // All packages = None
+        None //==- All packages = None
     } else {
-        // Parse and validate number, handling cases like "1." or "1.0"
+        //==- Parse and validate number, handling cases like "1." or "1.0"
         let num = input.split('.').next().unwrap_or("").parse::<usize>();
         match num {
             Ok(num) if num > 0 && num <= package_vec.len() => Some(num - 1),
@@ -202,7 +202,7 @@ fn main() {
             }
         }
         
-        // Print version and check availability
+        //==- Print version and check availability
         let is_available = match get_package_version_string(package) {
             Ok(version_string) => {
                 println!("{}", version_string);
@@ -214,9 +214,9 @@ fn main() {
             }
         };
 
-        // Only proceed with file listing if version was available
+        //==- Only proceed with file listing if version was available
         if is_available {
-            // Get and print files
+            //==- Get and print files
             println!("\n{} ({}) files:", package.name, package.id);
             match get_package_files(package) {
                 Ok(files) => {
@@ -232,7 +232,7 @@ fn main() {
                         let file_url = format!("{}{}", repo_url, file);
                         println!("{}", file_url);
                         
-                        // Transform filename and download
+                        //==- Transform filename and download
                         if let Some(new_filename) = transform_filename(&file) {
                             let target_path = package_dl_dir.join(&new_filename);
                             match download_file(&file_url, &target_path) {
@@ -244,20 +244,20 @@ fn main() {
                         }
                     }
 
-                    // Prompt for password
+                    //==- Prompt for password
                     print!("\nEnter password for extraction (press Enter to use previous password): ");
                     io::stdout().flush().unwrap();
                     let mut password = String::new();
                     io::stdin().read_line(&mut password).unwrap();
                     let password = password.trim();
                     
-                    // Use previous password if empty
+                    //==- Use previous password if empty
                     let password = if password.is_empty() { &last_password } else { 
                         last_password = password.to_string();
                         &last_password
                     };
 
-                    // Extract archives
+                    //==- Extract archives
                     match extract_archives(&nanazip_path, &package_dl_dir, password) {
                         Ok(_) => println!("Successfully extracted archives"),
                         Err(e) => println!("Error extracting archives: {}", e),
@@ -267,7 +267,7 @@ fn main() {
             }
         }
         
-        println!(); // Add a blank line between packages
+        println!(); //==- Add a blank line between packages
         
         if selected_index.is_some() {
             break;
