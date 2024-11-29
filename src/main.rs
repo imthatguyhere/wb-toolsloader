@@ -1,7 +1,7 @@
 use config::Config;
 use std::collections::HashMap;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::fs;
 use std::process::Command;
 use serde::Deserialize;
@@ -78,7 +78,7 @@ fn should_update_package(current: Option<&Version>, new: &Version) -> Result<boo
                 io::stdin().read_line(&mut choice)?;
                 Ok(choice.trim().eq_ignore_ascii_case("Y"))
             } else {
-                Ok(true) // current < new, should update
+                Ok(true) //==- If current < new, it should update
             }
         }
     }
@@ -157,7 +157,7 @@ fn handle_output_dir(output_dir: &Path) -> Result<(), Box<dyn std::error::Error>
             fs::create_dir_all(output_dir)?;
             println!("Deleted and recreated output folder");
         } else {
-            // Default to overwrite (empty input or "O")
+            //==- Default to overwrite (empty input or "O")
             println!("Will overwrite existing files");
         }
     } else {
@@ -257,8 +257,12 @@ fn main() {
     println!("Looking for config at: {:?}", config_path);
 
     let settings: Settings = Config::builder()
-        .add_source(config::File::with_name("Config").required(false))
+        //==- Override with local Config.toml next to executable
         .add_source(config::File::with_name(config_path.to_str().unwrap()).required(false))
+        //==- Add environment variable source with prefix WBTL
+        .add_source(config::Environment::with_prefix("WBTL").separator("__"))
+          //==- Ex: WBTL_ARCHIVE__NANAZIP_EXE=path/to/nanazip.exe
+          //==- Ex: WBTL_PACKAGES__MYPACKAGE__OUTPUT_PATH=path/to/output
         .build()
         .unwrap()
         .try_deserialize()
@@ -282,7 +286,7 @@ fn main() {
     println!("\nAvailable packages:");
     println!("A. All packages");
     for (i, (_, package)) in package_vec.iter().enumerate() {
-        println!("{}. {}", i + 1, package.name);
+        println!("{}. {}: {}", i + 1, package.name, package.description);
     }
 
     //==- Get user input from the console
