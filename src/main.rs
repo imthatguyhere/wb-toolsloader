@@ -268,9 +268,5 @@ fn main() {
         }
         
         println!(); //==- Add a blank line between packages
-        
-        if selected_index.is_some() {
-            break;
-        }
     }
 }
