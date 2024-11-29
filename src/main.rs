@@ -43,6 +43,10 @@ impl Version {
 
         Ok(Version { date, iteration })
     }
+
+    fn verdate_to_string(&self) -> String {
+        format!("{}--{}", self.date, self.iteration)
+    }
 }
 
 fn get_current_version(output_dir: &Path) -> Result<Option<Version>, Box<dyn std::error::Error>> {
@@ -65,8 +69,16 @@ fn should_update_package(current: Option<&Version>, new: &Version) -> Result<boo
                 let mut choice = String::new();
                 io::stdin().read_line(&mut choice)?;
                 Ok(choice.trim().eq_ignore_ascii_case("Y"))
+            } else if current > new {
+                println!("Local version ({}) is newer than repository version ({})", 
+                    current.verdate_to_string(), new.verdate_to_string());
+                print!("Download older version from repository? (Y/N) [N]: ");
+                io::stdout().flush()?;
+                let mut choice = String::new();
+                io::stdin().read_line(&mut choice)?;
+                Ok(choice.trim().eq_ignore_ascii_case("Y"))
             } else {
-                Ok(current < new)
+                Ok(true) // current < new, should update
             }
         }
     }
@@ -359,7 +371,15 @@ fn main() {
 
                     match should_update_package(current_version.as_ref(), &version) {
                         Ok(true) => {
-                            println!("Updating to version: {}--{}", version.date, version.iteration);
+                            if let Some(current) = &current_version {
+                                if current > &version {
+                                    println!("Downgrading to version: {}", version.verdate_to_string());
+                                } else {
+                                    println!("Updating to version: {}", version.verdate_to_string());
+                                }
+                            } else {
+                                println!("Installing version: {}", version.verdate_to_string());
+                            }
                         },
                         Ok(false) => {
                             println!("Skipping package update");
@@ -417,28 +437,25 @@ fn main() {
                         match extract_archives(&nanazip_path, &package_dl_dir, &package_output_dir, current_password) {
                             Ok(_) => {
                                 println!("Successfully extracted archives");
-                                //==- Save version file after successful extraction
-                                if let Err(e) = save_version_file(&version, &package_output_dir) {
-                                    println!("Warning: Failed to save version file: {}", e);
-                                }
                                 if !password.is_empty() {
                                     last_password = password.to_string(); //==- Only save non-empty passwords if successful
                                 }
-                                break;
+                                break; //==- Exit password retry loop on success
                             },
                             Err(e) => {
-                                if e.to_string() == "Wrong password" {
-                                    println!("Wrong password! Please try again, or press Enter to skip this package.");
-                                    retry_mode = true;
-                                    continue;
-                                }
-                                println!("Error extracting archives: {}", e);
-                                break;
+                                println!("Error during extraction: {}", e);
+                                retry_mode = true;
+                                continue;
                             }
                         }
                     }
 
-                    //==- Clean up package download directory
+                    //==- Save version file after all archives are successfully extracted
+                    if let Err(e) = save_version_file(&version, &package_output_dir) {
+                        println!("Warning: Failed to save version file: {}", e);
+                    }
+
+                    //==- Clean up downloaded files
                     if let Err(e) = cleanup_package_dir(&package_dl_dir) {
                         println!("Error cleaning up package directory: {}", e);
                     }
