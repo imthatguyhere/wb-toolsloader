@@ -17,6 +17,7 @@ struct Package {
     filelist_url: String,
     repo_url: String,
     output_path: String,
+    password: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,17 +67,17 @@ fn should_update_package(current: Option<&Version>, new: &Version) -> Result<boo
             if current == new {
                 print!("Package version is the same. Reload anyway? (Y/N) [N]: ");
                 io::stdout().flush()?;
-                let mut choice = String::new();
-                io::stdin().read_line(&mut choice)?;
-                Ok(choice.trim().eq_ignore_ascii_case("Y"))
+                let mut buffer = String::new();
+                io::stdin().read_line(&mut buffer).unwrap();
+                Ok(buffer.trim().eq_ignore_ascii_case("Y"))
             } else if current > new {
                 println!("Local version ({}) is newer than repository version ({})", 
                     current.verdate_to_string(), new.verdate_to_string());
                 print!("Download older version from repository? (Y/N) [N]: ");
                 io::stdout().flush()?;
-                let mut choice = String::new();
-                io::stdin().read_line(&mut choice)?;
-                Ok(choice.trim().eq_ignore_ascii_case("Y"))
+                let mut buffer = String::new();
+                io::stdin().read_line(&mut buffer).unwrap();
+                Ok(buffer.trim().eq_ignore_ascii_case("Y"))
             } else {
                 Ok(true) //=-- If current < new, it should update
             }
@@ -148,9 +149,9 @@ fn handle_output_dir(output_dir: &Path) -> Result<(), Box<dyn std::error::Error>
     if output_dir.exists() {
         print!("(O)verwrite or (D)elete output folder? [O]: ");
         io::stdout().flush()?;
-        let mut choice = String::new();
-        io::stdin().read_line(&mut choice)?;
-        let choice = choice.trim().to_uppercase();
+        let mut buffer = String::new();
+        io::stdin().read_line(&mut buffer).unwrap();
+        let choice = buffer.trim().to_uppercase();
         
         if choice == "D" {
             fs::remove_dir_all(output_dir)?;
@@ -167,9 +168,6 @@ fn handle_output_dir(output_dir: &Path) -> Result<(), Box<dyn std::error::Error>
 }
 
 fn extract_archives(nanazip_path: &Path, package_dir: &Path, output_dir: &Path, password: &str) -> Result<(), Box<dyn std::error::Error>> {
-    //=-- Handle output directory first
-    handle_output_dir(output_dir)?;
-
     let archives: Vec<_> = fs::read_dir(package_dir)?
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
@@ -292,10 +290,10 @@ fn main() {
     //=-- Get user input from the console
     print!("\nSelect a package number (or A for all): ");
     io::stdout().flush().unwrap();
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).unwrap();
+    let mut buffer = String::new();
+    io::stdin().read_line(&mut buffer).unwrap();
     
-    let input = input.trim();
+    let input = buffer.trim();
     
     //=-- Parse selection
     let selected_index = if input.eq_ignore_ascii_case("a") || input.eq_ignore_ascii_case("all") {
@@ -311,8 +309,6 @@ fn main() {
             }
         }
     };
-
-    let mut last_password = String::new();
 
     println!("\n{}:", if selected_index.is_some() { "Package" } else { "Packages" });
     for (i, (_, package)) in package_vec.iter().enumerate() {
@@ -411,43 +407,69 @@ fn main() {
                         }
                     }
 
+                    //=-- Handle output directory before starting extraction attempts
+                    if let Err(e) = handle_output_dir(&package_output_dir) {
+                        println!("Error preparing output directory: {}", e);
+                        continue;
+                    }
+
                     //=-- Prompt for password and handle retries
                     let mut retry_mode = false;
+                    let mut last_password = String::new();
+                    
                     loop {
-                        let prompt = if retry_mode {
-                            "Enter password for extraction (press Enter [on a blank entry] to skip this package)"
-                            } else if last_password.is_empty() {
-                                "Enter password for extraction"
-                            } else {
-                                "Enter password for extraction (press Enter [on a blank entry] to use previous password)"
-                            };
-                        
-                        print!("\n{}: ", prompt);
-                        io::stdout().flush().unwrap();
-                        let mut password = String::new();
-                        io::stdin().read_line(&mut password).unwrap();
-                        let password = password.trim();
-                        
-                        let current_password = if !retry_mode && password.is_empty() {
+                        let current_password = if !package.password.is_empty() && !retry_mode {
+                            &package.password
+                        } else if retry_mode {
+                            print!("\nEnter password for extraction (press Enter [on a blank entry] to skip this package): ");
+                            io::stdout().flush().unwrap();
+                            let mut buffer = String::new();
+                            io::stdin().read_line(&mut buffer).unwrap();
+                            let password = buffer.trim();
+                            if password.is_empty() {
+                                println!("Skipping package due to empty password");
+                                break;
+                            }
+                            last_password = password.to_string();
                             &last_password
-                        } else if password.is_empty() {
-                            println!("Skipping package due to empty password");
-                            break;
+                        } else if !last_password.is_empty() {
+                            print!("\nEnter password for extraction (press Enter [on a blank entry] to use previous password): ");
+                            io::stdout().flush().unwrap();
+                            let mut buffer = String::new();
+                            io::stdin().read_line(&mut buffer).unwrap();
+                            let password = buffer.trim();
+                            if !password.is_empty() {
+                                last_password = password.to_string();
+                            }
+                            &last_password
                         } else {
-                            password
+                            print!("\nEnter password for extraction: ");
+                            io::stdout().flush().unwrap();
+                            let mut buffer = String::new();
+                            io::stdin().read_line(&mut buffer).unwrap();
+                            let password = buffer.trim();
+                            if password.is_empty() {
+                                println!("Skipping package due to empty password");
+                                break;
+                            }
+                            last_password = password.to_string();
+                            &last_password
                         };
 
                         //=-- Extract archives
                         match extract_archives(&nanazip_path, &package_dl_dir, &package_output_dir, current_password) {
                             Ok(_) => {
                                 println!("Successfully extracted archives");
-                                if !password.is_empty() {
-                                    last_password = password.to_string(); //=-- Only save non-empty passwords if successful
-                                }
                                 break; //=-- Exit password retry loop on success
                             },
                             Err(e) => {
                                 println!("Error during extraction: {}", e);
+                                if !package.password.is_empty() && !retry_mode {
+                                    println!("Password from config failed, falling back to manual entry");
+                                    retry_mode = true;
+                                    last_password.clear(); //=-- Clear last password to force a new prompt
+                                    continue;
+                                }
                                 retry_mode = true;
                                 continue;
                             }
@@ -475,4 +497,8 @@ fn main() {
     if let Err(e) = cleanup_package_dir(&dl_dir) {
         println!("Error cleaning up download directory: {}", e);
     }
+
+    let mut buffer = String::new(); //=-- Garbo buffer for a final pause
+    io::stdin().read_line(&mut buffer).unwrap(); 
+    println!("Tools loading completeed");
 }
