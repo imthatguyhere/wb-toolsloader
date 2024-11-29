@@ -1,0 +1,14 @@
+[archive]
+nanazip_exe = "../../nz/Nanazip.Console.exe"
+
+# Package Configuration
+[packages]
+
+# Package: test
+[packages.name]
+id = ""
+name = ""
+description = ""
+version_url = "https://" # Raw URL to file
+filelist_url = "https://" # Raw URL to file
+repo_url = "https://"
