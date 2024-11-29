@@ -25,6 +25,53 @@ struct Settings {
     packages: HashMap<String, Package>,
 }
 
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Version {
+    date: String,
+    iteration: i32,
+}
+
+impl Version {
+    fn parse(version_str: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let parts: Vec<&str> = version_str.trim().split("--").collect();
+        if parts.len() != 2 {
+            return Err("Invalid version format. Expected YYYY-MM-DD--N".into());
+        }
+
+        let date = parts[0].to_string();
+        let iteration = parts[1].parse::<i32>()?;
+
+        Ok(Version { date, iteration })
+    }
+}
+
+fn get_current_version(output_dir: &Path) -> Result<Option<Version>, Box<dyn std::error::Error>> {
+    let version_file = output_dir.join("version.txt");
+    if !version_file.exists() {
+        return Ok(None);
+    }
+    
+    let content = fs::read_to_string(version_file)?;
+    Ok(Some(Version::parse(&content)?))
+}
+
+fn should_update_package(current: Option<&Version>, new: &Version) -> Result<bool, Box<dyn std::error::Error>> {
+    match current {
+        None => Ok(true),
+        Some(current) => {
+            if current == new {
+                print!("Package version is the same. Reload anyway? (Y/N) [N]: ");
+                io::stdout().flush()?;
+                let mut choice = String::new();
+                io::stdin().read_line(&mut choice)?;
+                Ok(choice.trim().eq_ignore_ascii_case("Y"))
+            } else {
+                Ok(current < new)
+            }
+        }
+    }
+}
+
 fn get_version(url: &str) -> Result<String, Box<dyn std::error::Error>> {
     let client = Client::new();
     let response = client.get(url).send()?;
@@ -175,9 +222,10 @@ fn extract_archives(nanazip_path: &Path, package_dir: &Path, output_dir: &Path, 
     Ok(())
 }
 
-fn save_version_file(version: &str, output_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn save_version_file(version: &Version, output_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let version_file = output_dir.join("version.txt");
-    fs::write(version_file, version)?;
+    let version_str = format!("{}--{}", version.date, version.iteration);
+    fs::write(version_file, version_str)?;
     Ok(())
 }
 
@@ -285,11 +333,40 @@ fn main() {
                     let package_dl_dir = dl_dir.join(&package.id);
                     let package_output_dir = config_dir.join(&package.output_path);
 
-                    //==- Get version before downloading files
+                    //==- Get and check version before downloading files
                     let version = match get_version(&package.version_url) {
-                        Ok(v) => v,
+                        Ok(v) => match Version::parse(&v) {
+                            Ok(parsed) => parsed,
+                            Err(e) => {
+                                println!("Failed to parse version: {}", e);
+                                continue;
+                            }
+                        },
                         Err(e) => {
                             println!("Failed to get version: {}", e);
+                            continue;
+                        }
+                    };
+
+                    //==- Check current version and prompt if needed
+                    let current_version = match get_current_version(&package_output_dir) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            println!("Failed to read current version: {}", e);
+                            None
+                        }
+                    };
+
+                    match should_update_package(current_version.as_ref(), &version) {
+                        Ok(true) => {
+                            println!("Updating to version: {}--{}", version.date, version.iteration);
+                        },
+                        Ok(false) => {
+                            println!("Skipping package update");
+                            continue;
+                        },
+                        Err(e) => {
+                            println!("Error checking version: {}", e);
                             continue;
                         }
                     };
