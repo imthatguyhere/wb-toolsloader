@@ -175,6 +175,12 @@ fn extract_archives(nanazip_path: &Path, package_dir: &Path, output_dir: &Path, 
     Ok(())
 }
 
+fn save_version_file(version: &str, output_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let version_file = output_dir.join("version.txt");
+    fs::write(version_file, version)?;
+    Ok(())
+}
+
 fn cleanup_package_dir(dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     if dir.exists() {
         fs::remove_dir_all(dir)?;
@@ -278,6 +284,15 @@ fn main() {
                     
                     let package_dl_dir = dl_dir.join(&package.id);
                     let package_output_dir = config_dir.join(&package.output_path);
+
+                    //==- Get version before downloading files
+                    let version = match get_version(&package.version_url) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            println!("Failed to get version: {}", e);
+                            continue;
+                        }
+                    };
                     
                     for file in files {
                         let file_url = format!("{}{}", repo_url, file);
@@ -325,6 +340,10 @@ fn main() {
                         match extract_archives(&nanazip_path, &package_dl_dir, &package_output_dir, current_password) {
                             Ok(_) => {
                                 println!("Successfully extracted archives");
+                                //==- Save version file after successful extraction
+                                if let Err(e) = save_version_file(&version, &package_output_dir) {
+                                    println!("Warning: Failed to save version file: {}", e);
+                                }
                                 if !password.is_empty() {
                                     last_password = password.to_string(); //==- Only save non-empty passwords if successful
                                 }
