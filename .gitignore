@@ -10,4 +10,4 @@
 .idea/
 
 /target
-/src/Config.toml
+Config.toml
