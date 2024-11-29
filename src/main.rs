@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::fs;
+use std::process::Command;
 use serde::Deserialize;
 use reqwest::blocking::Client;
 use regex::Regex;
@@ -62,6 +63,10 @@ fn transform_filename(filename: &str) -> Option<String> {
     Some(re.replace(filename, new_suffix).to_string())
 }
 
+fn get_base_name(filename: &str) -> Option<String> {
+    filename.split(".7z.").next().map(|s| s.to_string())
+}
+
 fn download_file(url: &str, target_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     // Create parent directories if they don't exist
     if let Some(parent) = target_path.parent() {
@@ -76,6 +81,54 @@ fn download_file(url: &str, target_path: &Path) -> Result<(), Box<dyn std::error
 
     let mut file = fs::File::create(target_path)?;
     io::copy(&mut response.bytes()?.as_ref(), &mut file)?;
+    Ok(())
+}
+
+fn extract_archives(nanazip_path: &Path, package_dir: &Path, password: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let archives: Vec<_> = fs::read_dir(package_dir)?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry.path().extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.starts_with("001"))
+                .unwrap_or(false)
+        })
+        .collect();
+    for archive in archives {
+        let archive_path = archive.path();
+        if let Some(base_name) = get_base_name(archive_path.file_name().unwrap().to_str().unwrap()) {
+            let extract_dir = package_dir.join(&base_name);
+            fs::create_dir_all(&extract_dir)?;
+
+            let mut cmd = Command::new(nanazip_path);
+            cmd.current_dir(package_dir)
+               .arg("x")
+               .arg(&archive_path)
+               .arg(format!("-o{}", extract_dir.display()));
+
+            if !password.is_empty() {
+                cmd.arg(format!("-p{}", password));
+            }
+
+            match cmd.output() {
+                Ok(output) => {
+                    if !output.status.success() {
+                        return Err(format!(
+                            "Failed to extract {}: {}", 
+                            archive_path.display(),
+                            String::from_utf8_lossy(&output.stderr)
+                        ).into());
+                    }
+                    println!("Extracted {} to {}", archive_path.display(), extract_dir.display());
+                },
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    println!("!==-- The config for NanaZip's location is incorrect. NanaZip executable not found. --==!");
+                    return Err(Box::new(e));
+                },
+                Err(e) => return Err(Box::new(e)),
+            }
+        }
+    }
     Ok(())
 }
 
@@ -94,6 +147,11 @@ fn main() {
         .unwrap()
         .try_deserialize()
         .unwrap();
+
+    // Get NanaZip path from config and resolve it relative to the executable directory
+    let nanazip_relative_path = settings.archive.get("nanazip_exe")
+        .expect("nanazip_exe not found in config");
+    let nanazip_path = config_dir.join(nanazip_relative_path);
 
     //==- Convert the packages to a sorted vec
     let mut package_vec: Vec<(&String, &Package)> = settings.packages.iter().collect();
@@ -133,6 +191,8 @@ fn main() {
             }
         }
     };
+
+    let mut last_password = String::new();
 
     println!("\n{}:", if selected_index.is_some() { "Package" } else { "Packages" });
     for (i, (_, package)) in package_vec.iter().enumerate() {
@@ -182,6 +242,25 @@ fn main() {
                         } else {
                             println!("Error: Could not transform filename: {}", file);
                         }
+                    }
+
+                    // Prompt for password
+                    print!("\nEnter password for extraction (press Enter to use previous password): ");
+                    io::stdout().flush().unwrap();
+                    let mut password = String::new();
+                    io::stdin().read_line(&mut password).unwrap();
+                    let password = password.trim();
+                    
+                    // Use previous password if empty
+                    let password = if password.is_empty() { &last_password } else { 
+                        last_password = password.to_string();
+                        &last_password
+                    };
+
+                    // Extract archives
+                    match extract_archives(&nanazip_path, &package_dl_dir, password) {
+                        Ok(_) => println!("Successfully extracted archives"),
+                        Err(e) => println!("Error extracting archives: {}", e),
                     }
                 },
                 Err(e) => println!("Error fetching file list:\n {}", e),
