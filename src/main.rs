@@ -34,6 +34,23 @@ fn get_package_version_string(package: &Package) -> Result<String, Box<dyn std::
     Ok(format!("{}: {}", package.name, version))
 }
 
+fn get_package_files(package: &Package) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let client = Client::new();
+    let response = client.get(&package.filelist_url).send()?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err("File list cannot be retrieved: 404 Not Found".into());
+    }
+    
+    let content = response.text()?;
+    let files: Vec<String> = content
+        .lines()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect();
+    
+    Ok(files)
+}
+
 fn main() {
     let exe_path = std::env::current_exe().expect("Failed to get executable path");
     let config_dir = exe_path.parent().expect("Failed to get executable directory");
@@ -88,7 +105,7 @@ fn main() {
         }
     };
 
-    println!("\n{}:", if selected_index.is_some() { "Version" } else { "Versions" });
+    println!("\n{}:", if selected_index.is_some() { "Package" } else { "Packages" });
     for (i, (_, package)) in package_vec.iter().enumerate() {
         if let Some(idx) = selected_index {
             if i != idx {
@@ -96,10 +113,39 @@ fn main() {
             }
         }
         
-        match get_package_version_string(package) {
-            Ok(version_string) => println!("{}", version_string),
-            Err(e) => println!("Error fetching version for {}:\n {}", package.name, e),
+        // Print version and check availability
+        let is_available = match get_package_version_string(package) {
+            Ok(version_string) => {
+                println!("{}", version_string);
+                true
+            },
+            Err(e) => {
+                println!("{} is not available:\n {}", package.name, e);
+                false
+            }
+        };
+
+        // Only proceed with file listing if version was available
+        if is_available {
+            // Get and print files
+            println!("\n{} ({}) files:", package.name, package.id);
+            match get_package_files(package) {
+                Ok(files) => {
+                    let repo_url = if package.repo_url.ends_with('/') {
+                        package.repo_url.clone()
+                    } else {
+                        format!("{}/", package.repo_url)
+                    };
+                    
+                    for file in files {
+                        println!("{}{}", repo_url, file);
+                    }
+                },
+                Err(e) => println!("Error fetching file list:\n {}", e),
+            }
         }
+        
+        println!(); // Add a blank line between packages
         
         if selected_index.is_some() {
             break;
