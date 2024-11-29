@@ -16,6 +16,7 @@ struct Package {
     version_url: String,
     filelist_url: String,
     repo_url: String,
+    output_path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,7 +85,7 @@ fn download_file(url: &str, target_path: &Path) -> Result<(), Box<dyn std::error
     Ok(())
 }
 
-fn extract_archives(nanazip_path: &Path, package_dir: &Path, password: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn extract_archives(nanazip_path: &Path, package_dir: &Path, output_dir: &Path, password: &str) -> Result<(), Box<dyn std::error::Error>> {
     let archives: Vec<_> = fs::read_dir(package_dir)?
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
@@ -120,6 +121,18 @@ fn extract_archives(nanazip_path: &Path, package_dir: &Path, password: &str) -> 
                         ).into());
                     }
                     println!("Extracted {} to {}", archive_path.display(), extract_dir.display());
+
+                    //==- Move extracted files to output directory
+                    fs::create_dir_all(output_dir)?;
+                    for entry in fs::read_dir(&extract_dir)? {
+                        let entry = entry?;
+                        let target_path = output_dir.join(entry.file_name());
+                        fs::rename(entry.path(), target_path)?;
+                    }
+                    println!("Moved files to {}", output_dir.display());
+
+                    //==- Clean up extraction directory
+                    fs::remove_dir_all(&extract_dir)?;
                 },
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     println!("!==-- The config for NanaZip's location is incorrect. NanaZip executable not found. --==!");
@@ -128,6 +141,13 @@ fn extract_archives(nanazip_path: &Path, package_dir: &Path, password: &str) -> 
                 Err(e) => return Err(Box::new(e)),
             }
         }
+    }
+    Ok(())
+}
+
+fn cleanup_package_dir(dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    if dir.exists() {
+        fs::remove_dir_all(dir)?;
     }
     Ok(())
 }
@@ -223,10 +243,11 @@ fn main() {
                     let repo_url = if package.repo_url.ends_with('/') {
                         package.repo_url.clone()
                     } else {
-                        format!("{}/", package.repo_url)
+                        format!("{}\\", package.repo_url)
                     };
                     
                     let package_dl_dir = dl_dir.join(&package.id);
+                    let package_output_dir = config_dir.join(&package.output_path);
                     
                     for file in files {
                         let file_url = format!("{}{}", repo_url, file);
@@ -258,9 +279,14 @@ fn main() {
                     };
 
                     //==- Extract archives
-                    match extract_archives(&nanazip_path, &package_dl_dir, password) {
+                    match extract_archives(&nanazip_path, &package_dl_dir, &package_output_dir, password) {
                         Ok(_) => println!("Successfully extracted archives"),
                         Err(e) => println!("Error extracting archives: {}", e),
+                    }
+
+                    //==- Clean up package download directory
+                    if let Err(e) = cleanup_package_dir(&package_dl_dir) {
+                        println!("Error cleaning up package directory: {}", e);
                     }
                 },
                 Err(e) => println!("Error fetching file list:\n {}", e),
@@ -268,5 +294,10 @@ fn main() {
         }
         
         println!(); //==- Add a blank line between packages
+    }
+
+    //==- Clean up main download directory
+    if let Err(e) = cleanup_package_dir(&dl_dir) {
+        println!("Error cleaning up download directory: {}", e);
     }
 }
