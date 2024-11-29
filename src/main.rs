@@ -85,7 +85,32 @@ fn download_file(url: &str, target_path: &Path) -> Result<(), Box<dyn std::error
     Ok(())
 }
 
+fn handle_output_dir(output_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    if output_dir.exists() {
+        print!("(O)verwrite or (D)elete output folder? [O]: ");
+        io::stdout().flush()?;
+        let mut choice = String::new();
+        io::stdin().read_line(&mut choice)?;
+        let choice = choice.trim().to_uppercase();
+        
+        if choice == "D" {
+            fs::remove_dir_all(output_dir)?;
+            fs::create_dir_all(output_dir)?;
+            println!("Deleted and recreated output folder");
+        } else {
+            // Default to overwrite (empty input or "O")
+            println!("Will overwrite existing files");
+        }
+    } else {
+        fs::create_dir_all(output_dir)?;
+    }
+    Ok(())
+}
+
 fn extract_archives(nanazip_path: &Path, package_dir: &Path, output_dir: &Path, password: &str) -> Result<(), Box<dyn std::error::Error>> {
+    //==- Handle output directory first
+    handle_output_dir(output_dir)?;
+
     let archives: Vec<_> = fs::read_dir(package_dir)?
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
@@ -104,7 +129,7 @@ fn extract_archives(nanazip_path: &Path, package_dir: &Path, output_dir: &Path, 
             let mut cmd = Command::new(nanazip_path);
             cmd.current_dir(package_dir)
                .arg("x")
-               .arg("-y") // Force yes on all queries
+               .arg("-y") //==- Force yes on all queries
                .arg(&archive_path)
                .arg(format!("-o{}", extract_dir.display()));
 
@@ -301,7 +326,7 @@ fn main() {
                             Ok(_) => {
                                 println!("Successfully extracted archives");
                                 if !password.is_empty() {
-                                    last_password = password.to_string(); // Only save non-empty passwords if successful
+                                    last_password = password.to_string(); //==- Only save non-empty passwords if successful
                                 }
                                 break;
                             },
