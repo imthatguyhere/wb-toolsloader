@@ -1,8 +1,11 @@
 use config::Config;
 use std::collections::HashMap;
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::fs;
 use serde::Deserialize;
 use reqwest::blocking::Client;
+use regex::Regex;
 
 #[derive(Debug, Deserialize, Clone)]
 struct Package {
@@ -51,10 +54,36 @@ fn get_package_files(package: &Package) -> Result<Vec<String>, Box<dyn std::erro
     Ok(files)
 }
 
+fn transform_filename(filename: &str) -> Option<String> {
+    let re = Regex::new(r"--n(\d+)\.globby$").ok()?;
+    let caps = re.captures(filename)?;
+    let number = caps.get(1)?.as_str().parse::<i32>().ok()?;
+    let new_suffix = format!(".7z.{:03}", number);
+    Some(re.replace(filename, new_suffix).to_string())
+}
+
+fn download_file(url: &str, target_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    // Create parent directories if they don't exist
+    if let Some(parent) = target_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let client = Client::new();
+    let response = client.get(url).send()?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err("File cannot be downloaded: 404 Not Found".into());
+    }
+
+    let mut file = fs::File::create(target_path)?;
+    io::copy(&mut response.bytes()?.as_ref(), &mut file)?;
+    Ok(())
+}
+
 fn main() {
     let exe_path = std::env::current_exe().expect("Failed to get executable path");
     let config_dir = exe_path.parent().expect("Failed to get executable directory");
     let config_path = config_dir.join("Config.toml");
+    let dl_dir = config_dir.join("dl");
     
     println!("Looking for config at: {:?}", config_path);
 
@@ -137,8 +166,22 @@ fn main() {
                         format!("{}/", package.repo_url)
                     };
                     
+                    let package_dl_dir = dl_dir.join(&package.id);
+                    
                     for file in files {
-                        println!("{}{}", repo_url, file);
+                        let file_url = format!("{}{}", repo_url, file);
+                        println!("{}", file_url);
+                        
+                        // Transform filename and download
+                        if let Some(new_filename) = transform_filename(&file) {
+                            let target_path = package_dl_dir.join(&new_filename);
+                            match download_file(&file_url, &target_path) {
+                                Ok(_) => println!("Downloaded as: {}", new_filename),
+                                Err(e) => println!("Error downloading {}: {}", file, e),
+                            }
+                        } else {
+                            println!("Error: Could not transform filename: {}", file);
+                        }
                     }
                 },
                 Err(e) => println!("Error fetching file list:\n {}", e),
