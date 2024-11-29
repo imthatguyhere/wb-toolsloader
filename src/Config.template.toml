@@ -12,3 +12,4 @@ description = ""
 version_url = "https://" # Raw URL to file
 filelist_url = "https://" # Raw URL to file
 repo_url = "https://"
+output_path = ""
