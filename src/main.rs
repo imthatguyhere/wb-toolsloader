@@ -330,36 +330,43 @@ fn main() {
         return;
     }
 
-    //=-- Display numbered list
-    println!("\nAvailable packages:");
-    println!("A. All packages");
-    for (i, (_, package)) in package_vec.iter().enumerate() {
-        println!("{}. {}: {}", i + 1, package.name, package.description);
-    }
+    let selected_index = loop {
+        //=-- Display numbered list
+        println!("\nAvailable packages:");
+        println!("A. All packages");
+        for (i, (_, package)) in package_vec.iter().enumerate() {
+            println!("{}. {}: {}", i + 1, package.name, package.description);
+        }
+        println!("E. Exit");
 
-    //=-- Get user input from the console
-    print!("\nSelect a package number (or A for all): ");
-    io::stdout().flush().unwrap();
-    let mut buffer = String::new();
-    io::stdin().read_line(&mut buffer).unwrap();
-    
-    let input = buffer.trim();
-    
-    //=-- Parse selection
-    let selected_index = if input.eq_ignore_ascii_case("a") || input.eq_ignore_ascii_case("all") {
-        None //=-- All packages = None
-    } else {
-        //=-- Parse and validate number, handling cases like "1." or "1.0"
-        let num = input.split('.').next().unwrap_or("").parse::<usize>();
-        match num {
-            Ok(num) if num > 0 && num <= package_vec.len() => Some(num - 1),
-            _ => {
-                println!("Invalid selection");
-                return;
+        //=-- Get user input from the console
+        print!("\nSelect a package number (A for all, E to exit): ");
+        io::stdout().flush().unwrap();
+        let mut buffer = String::new();
+        io::stdin().read_line(&mut buffer).unwrap();
+        
+        let input = buffer.trim();
+        
+        //=-- Parse selection
+        if input.eq_ignore_ascii_case("e") || input.eq_ignore_ascii_case("exit") {
+            return;
+        } else if input.eq_ignore_ascii_case("a") || input.eq_ignore_ascii_case("all") {
+            break None; //=-- All packages = None
+        } else {
+            //=-- Parse and validate number, handling cases like "1." or "1.0"
+            match input.split('.').next().and_then(|s| s.parse::<usize>().ok()) {
+                Some(n) if n > 0 && n <= package_vec.len() => {
+                    break Some(n - 1);
+                }
+                _ => {
+                    println!("Invalid selection!");
+                    continue;
+                }
             }
         }
     };
 
+    //=-- Process selected package(s)
     println!("\n{}:", if selected_index.is_some() { "Package" } else { "Packages" });
     for (i, (_, package)) in package_vec.iter().enumerate() {
         if let Some(idx) = selected_index {
