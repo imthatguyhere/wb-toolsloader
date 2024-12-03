@@ -359,7 +359,7 @@ fn main() {
                     break Some(n - 1);
                 }
                 _ => {
-                    println!("Invalid selection!");
+                    println!("Invalid selection! ({})", input);
                     continue;
                 }
             }
