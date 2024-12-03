@@ -1,10 +1,14 @@
+[main]
+version_url = "https://raw.githubusercontent.com/imthatguyhere/wb-toolsloader/refs/heads/main/version.txt"
+
+#=-- Archive Handling Configuration
 [archive]
 nanazip_exe = "../../nz/Nanazip.Console.exe"
 
-# Package Configuration
+#=-- Package Configuration
 [packages]
 
-# Package: test
+#=-- Package: test
 [packages.name]
 id = ""
 name = ""
