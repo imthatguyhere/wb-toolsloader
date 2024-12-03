@@ -24,6 +24,7 @@ struct Package {
 struct Settings {
     archive: HashMap<String, String>,
     packages: HashMap<String, Package>,
+    main: HashMap<String, String>,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -246,6 +247,25 @@ fn cleanup_package_dir(dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn get_local_version(exe_dir: &Path) -> Result<Option<Version>, Box<dyn std::error::Error>> {
+    let version_path = exe_dir.join("version.txt");
+    if version_path.exists() {
+        let version_str = fs::read_to_string(version_path)?;
+        Ok(Some(Version::parse(&version_str)?))
+    } else {
+        Ok(None)
+    }
+}
+
+fn prompt_continue_or_quit() -> bool {
+    print!("Would you like to (C)ontinue or (Q)uit? [Q]: ");
+    io::stdout().flush().unwrap();
+    let mut buffer = String::new();
+    io::stdin().read_line(&mut buffer).unwrap();
+    
+    buffer.trim().eq_ignore_ascii_case("c")
+}
+
 fn main() {
     let exe_path = std::env::current_exe().expect("Failed to get executable path");
     let config_dir = exe_path.parent().expect("Failed to get executable directory");
@@ -270,6 +290,36 @@ fn main() {
     let nanazip_relative_path = settings.archive.get("nanazip_exe")
         .expect("nanazip_exe not found in config");
     let nanazip_path = config_dir.join(nanazip_relative_path);
+
+    //=-- Check version
+    let local_version = get_local_version(config_dir).unwrap_or(None);
+    let remote_version_str = get_version(&settings.main.get("version_url").expect("version_url not found in config")).unwrap_or_default();
+    let remote_version = Version::parse(&remote_version_str).unwrap();
+
+    match local_version {
+        Some(local) => {
+            if local < remote_version {
+                println!("WarpBits Tools Loader is out of date, please download the new version: {}", remote_version.verdate_to_string());
+                if !prompt_continue_or_quit() {
+                    return;
+                }
+            } else if local > remote_version {
+                println!("WarpBits Tools Loader's version is in the future.\nYou may want to download a fresh copy.\nCurrent: {}. Remote: {}", 
+                    local.verdate_to_string(), remote_version.verdate_to_string());
+                if !prompt_continue_or_quit() {
+                    return;
+                }
+            } else {
+                println!("WarpBits Tools Loader is up to date, running version: {}", local.verdate_to_string());
+            }
+        },
+        None => {
+            println!("WarpBits Tools Loader version file not found, please download a fresh copy. Remote version: {}", remote_version.verdate_to_string());
+            if !prompt_continue_or_quit() {
+                return;
+            }
+        }
+    }
 
     //=-- Convert the packages to a sorted vec
     let mut package_vec: Vec<(&String, &Package)> = settings.packages.iter().collect();
