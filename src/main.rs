@@ -1,7 +1,7 @@
 use config::Config;
 use std::collections::HashMap;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::fs;
 use std::process::Command;
 use serde::Deserialize;
@@ -266,6 +266,71 @@ fn prompt_continue_or_quit() -> bool {
     buffer.trim().eq_ignore_ascii_case("c")
 }
 
+fn prompt_yes_no(prompt: &str) -> bool {
+    print!("{}? (Y/N) [N]: ", prompt);
+    io::stdout().flush().unwrap();
+    let mut buffer = String::new();
+    io::stdin().read_line(&mut buffer).unwrap();
+    
+    buffer.trim().eq_ignore_ascii_case("y")
+}
+
+fn normalize_path(path_str: &str) -> String {
+    path_str.trim_end_matches(|c| c == '/' || c == '\\').to_string()
+}
+
+fn prompt_for_path(config_dir: &Path) -> Option<PathBuf> {
+    loop {
+        print!("Enter path or leave blank for the \"output\" folder relative to this application (or E to exit): ");
+        io::stdout().flush().unwrap();
+        let mut buffer = String::new();
+        io::stdin().read_line(&mut buffer).unwrap();
+        
+        let input = buffer.trim();
+        if input.eq_ignore_ascii_case("e") || input.eq_ignore_ascii_case("exit") {
+            return None;
+        }
+
+        let path = if input.is_empty() {
+            config_dir.join("output")
+        } else {
+            PathBuf::from(normalize_path(input))
+        };
+
+        if path.exists() {
+            return Some(path);
+        }
+        println!("Path does not exist! ({})", path.display());
+    }
+}
+
+fn resolve_output_root(config_dir: &Path, settings: &Settings) -> Option<PathBuf> {
+    let output_root = settings.main.get("output_root")
+        .map(|s| normalize_path(s.trim()))
+        .unwrap_or_default();
+
+    if output_root.is_empty() {
+        return Some(config_dir.to_path_buf());
+    }
+
+    let path = if Path::new(&output_root).is_absolute() {
+        PathBuf::from(&output_root)
+    } else {
+        config_dir.join(&output_root)
+    };
+
+    if path.exists() {
+        Some(path)
+    } else {
+        println!("Output root path does not exist: {}", path.display());
+        if prompt_yes_no("Would you like to enter a different path") {
+            prompt_for_path(config_dir)
+        } else {
+            None
+        }
+    }
+}
+
 fn main() {
     let exe_path = std::env::current_exe().expect("Failed to get executable path");
     let config_dir = exe_path.parent().expect("Failed to get executable directory");
@@ -290,6 +355,13 @@ fn main() {
     let nanazip_relative_path = settings.archive.get("nanazip_exe")
         .expect("nanazip_exe not found in config");
     let nanazip_path = config_dir.join(nanazip_relative_path);
+
+    //=-- Resolve output root path
+    let output_root = match resolve_output_root(config_dir, &settings) {
+        Some(path) => path,
+        None => return,
+    };
+    println!("Using output root: {}", output_root.display());
 
     //=-- Check version
     let local_version = get_local_version(config_dir).unwrap_or(None);
@@ -400,7 +472,7 @@ fn main() {
                     };
                     
                     let package_dl_dir = dl_dir.join(&package.id);
-                    let package_output_dir = config_dir.join(&package.output_path);
+                    let package_output_dir = output_root.join(&package.output_path);
 
                     //=-- Get and check version before downloading files
                     let version = match get_version(&package.version_url) {
@@ -554,8 +626,8 @@ fn main() {
     if let Err(e) = cleanup_package_dir(&dl_dir) {
         println!("Error cleaning up download directory: {}", e);
     }
-
+    println!("Tools loading completed.\nPress Enter to exit...");
     let mut buffer = String::new(); //=-- Garbo buffer for a final pause
     io::stdin().read_line(&mut buffer).unwrap(); 
-    println!("Tools loading completeed");
+    
 }
