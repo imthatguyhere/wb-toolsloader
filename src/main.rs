@@ -7,6 +7,7 @@ use std::process::Command;
 use serde::Deserialize;
 use reqwest::blocking::Client;
 use regex::Regex;
+use indexmap::IndexMap;
 
 #[derive(Debug, Deserialize, Clone)]
 struct Package {
@@ -18,12 +19,13 @@ struct Package {
     repo_url: String,
     output_path: String,
     password: String,
+    is_root: bool,
 }
 
 #[derive(Debug, Deserialize)]
 struct Settings {
     archive: HashMap<String, String>,
-    packages: HashMap<String, Package>,
+    packages: IndexMap<String, Package>,
     main: HashMap<String, String>,
 }
 
@@ -146,21 +148,25 @@ fn download_file(url: &str, target_path: &Path) -> Result<(), Box<dyn std::error
     Ok(())
 }
 
-fn handle_output_dir(output_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn handle_output_dir(output_dir: &Path, package: &Package) -> Result<(), Box<dyn std::error::Error>> {
     if output_dir.exists() {
-        print!("(O)verwrite or (D)elete output folder? [O]: ");
-        io::stdout().flush()?;
-        let mut buffer = String::new();
-        io::stdin().read_line(&mut buffer).unwrap();
-        let choice = buffer.trim().to_uppercase();
-        
-        if choice == "D" {
-            fs::remove_dir_all(output_dir)?;
-            fs::create_dir_all(output_dir)?;
-            println!("Deleted and recreated output folder");
+        if package.is_root {
+            println!("This is a root package, so we are skipping deletion and will overwrite the existing files");
         } else {
-            //=-- Default to overwrite (empty input or "O")
-            println!("Will overwrite existing files");
+            print!("(O)verwrite or (D)elete output folder? [O]: ");
+            io::stdout().flush()?;
+            let mut buffer = String::new();
+            io::stdin().read_line(&mut buffer).unwrap();
+            let choice = buffer.trim().to_uppercase();
+            
+            if choice == "D" {
+                fs::remove_dir_all(output_dir)?;
+                fs::create_dir_all(output_dir)?;
+                println!("Deleted and recreated output folder");
+            } else {
+                //=-- Default to overwrite (empty input or "O")
+                println!("Will overwrite existing files");
+            }
         }
     } else {
         fs::create_dir_all(output_dir)?;
@@ -394,9 +400,17 @@ fn main() {
             }
         }
 
-        //=-- Convert the packages to a sorted vec
+        //=-- Convert the packages to a sorted vec (root packages first, then alphabetical)
         let mut package_vec: Vec<(&String, &Package)> = settings.packages.iter().collect();
-        package_vec.sort_by(|a, b| a.1.name.cmp(&b.1.name));
+        package_vec.sort_by(|a, b| {
+            if a.1.is_root == b.1.is_root {
+                //#-- If both are root or both are not root, sort by name
+                a.1.name.cmp(&b.1.name)
+            } else {
+                //#-- If one is root and the other isn't, root comes first
+                b.1.is_root.cmp(&a.1.is_root)
+            }
+        });
 
         if package_vec.is_empty() {
             println!("No packages found in config!");
@@ -538,7 +552,7 @@ fn main() {
                         }
 
                         //=-- Handle output directory before starting extraction attempts
-                        if let Err(e) = handle_output_dir(&package_output_dir) {
+                        if let Err(e) = handle_output_dir(&package_output_dir, package) {
                             println!("Error preparing output directory: {}", e);
                             continue;
                         }

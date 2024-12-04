@@ -19,3 +19,4 @@ filelist_url = "https://" #=-- Raw URL to file
 repo_url = "https://" #=-- Raw URL to the folder with files
 output_path = ""
 password = "" #=-- The Archive's Password. Leave this empty to prompt for the password
+is_root = false #=-- If true, this package will force overwrite without prompting
