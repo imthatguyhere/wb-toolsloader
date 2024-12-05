@@ -4,6 +4,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::fs;
 use std::process::Command;
+use std::env;
 use serde::Deserialize;
 use reqwest::blocking::Client;
 use regex::Regex;
@@ -337,318 +338,357 @@ fn resolve_output_root(config_dir: &Path, settings: &Settings) -> Option<PathBuf
     }
 }
 
+fn resolve_temp_dir(settings: &Settings) -> PathBuf {
+    let temp_dir = settings.main.get("temp_dir")
+        .map(|s| normalize_path(s.trim()))
+        .unwrap_or_default();
+
+    if temp_dir.is_empty() {
+        env::temp_dir().join("wb-toolsloader")
+    } else {
+        PathBuf::from(&temp_dir).join("wb-toolsloader")
+    }
+}
+
+fn cleanup_temp_dir(dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    if dir.exists() {
+        fs::remove_dir_all(dir)?;
+    }
+    Ok(())
+}
+
 fn main() {
-    loop {
-        let exe_path = std::env::current_exe().expect("Failed to get executable path");
-        let config_dir = exe_path.parent().expect("Failed to get executable directory");
-        let config_path = config_dir.join("Config.toml");
-        let dl_dir = config_dir.join("dl");
-        
-        println!("Looking for config at: {:?}", config_path);
+    let temp_dir = resolve_temp_dir(&Settings {
+        archive: HashMap::new(),
+        packages: IndexMap::new(),
+        main: HashMap::new(),
+    });
 
-        let settings: Settings = Config::builder()
-            //=-- Override with local Config.toml next to executable
-            .add_source(config::File::with_name(config_path.to_str().unwrap()).required(false))
-            //=-- Add environment variable source with prefix WBTL
-            .add_source(config::Environment::with_prefix("WBTL").separator("__"))
-              //=-- Ex: WBTL_ARCHIVE__NANAZIP_EXE=path/to/nanazip.exe
-              //=-- Ex: WBTL_PACKAGES__MYPACKAGE__OUTPUT_PATH=path/to/output
-            .build()
-            .unwrap()
-            .try_deserialize()
-            .unwrap();
-
-        //=-- Get NanaZip path from config and resolve it relative to the executable directory
-        let nanazip_relative_path = settings.archive.get("nanazip_exe")
-            .expect("nanazip_exe not found in config");
-        let nanazip_path = config_dir.join(nanazip_relative_path);
-
-        //=-- Resolve output root path
-        let output_root = match resolve_output_root(config_dir, &settings) {
-            Some(path) => path,
-            None => return,
-        };
-        println!("Using output root: {}", output_root.display());
-
-        //=-- Check version
-        let local_version = get_local_version(config_dir).unwrap_or(None);
-        let remote_version_str = get_version(&settings.main.get("version_url").expect("version_url not found in config")).unwrap_or_default();
-        let remote_version = Version::parse(&remote_version_str).unwrap();
-
-        match local_version {
-            Some(local) => {
-                if local < remote_version {
-                    println!("WarpBits Tools Loader is out of date, please download the new version: {}", remote_version.verdate_to_string());
-                    if !prompt_continue_or_quit() {
-                        return;
-                    }
-                } else if local > remote_version {
-                    println!("WarpBits Tools Loader's version is in the future.\nYou may want to download a fresh copy.\nCurrent: {}. Remote: {}", 
-                        local.verdate_to_string(), remote_version.verdate_to_string());
-                    if !prompt_continue_or_quit() {
-                        return;
-                    }
-                } else {
-                    println!("WarpBits Tools Loader is up to date, running version: {}", local.verdate_to_string());
-                }
-            },
-            None => {
-                println!("WarpBits Tools Loader version file not found, please download a fresh copy. Remote version: {}", remote_version.verdate_to_string());
-                if !prompt_continue_or_quit() {
-                    return;
-                }
-            }
-        }
-
-        //=-- Convert the packages to a sorted vec (root packages first, then alphabetical)
-        let mut package_vec: Vec<(&String, &Package)> = settings.packages.iter().collect();
-        package_vec.sort_by(|a, b| {
-            if a.1.is_root == b.1.is_root {
-                //#-- If both are root or both are not root, sort by name
-                a.1.name.cmp(&b.1.name)
-            } else {
-                //#-- If one is root and the other isn't, root comes first
-                b.1.is_root.cmp(&a.1.is_root)
-            }
-        });
-
-        if package_vec.is_empty() {
-            println!("No packages found in config!");
-            return;
-        }
-
-        let selected_index = loop {
-            //=-- Display numbered list
-            println!("\nAvailable packages:");
-            println!("A. All packages");
-            for (i, (_, package)) in package_vec.iter().enumerate() {
-                println!("{}. {}: {}", i + 1, package.name, package.description);
-            }
-            println!("E. Exit");
-
-            //=-- Get user input from the console
-            print!("\nSelect a package number (A for all, E to exit): ");
-            io::stdout().flush().unwrap();
-            let mut buffer = String::new();
-            io::stdin().read_line(&mut buffer).unwrap();
+    //=-- Create a result that we'll use to track if we need to clean up
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        loop {
+            let exe_path = std::env::current_exe().expect("Failed to get executable path");
+            let config_dir = exe_path.parent().expect("Failed to get executable directory");
+            let config_path = config_dir.join("Config.toml");
+            let dl_dir = temp_dir.join("dl");
             
-            let input = buffer.trim();
-            
-            //=-- Parse selection
-            if input.eq_ignore_ascii_case("e") || input.eq_ignore_ascii_case("exit") {
-                return;
-            } else if input.eq_ignore_ascii_case("a") || input.eq_ignore_ascii_case("all") {
-                break None; //=-- All packages = None
-            } else {
-                //=-- Parse and validate number, handling cases like "1." or "1.0"
-                match input.split('.').next().and_then(|s| s.parse::<usize>().ok()) {
-                    Some(n) if n > 0 && n <= package_vec.len() => {
-                        break Some(n - 1);
-                    }
-                    _ => {
-                        println!("Invalid selection! ({})", input);
-                        continue;
-                    }
-                }
-            }
-        };
+            println!("Looking for config at: {:?}", config_path);
 
-        //=-- Process selected package(s)
-        println!("\n{}:", if selected_index.is_some() { "Package" } else { "Packages" });
-        for (i, (_, package)) in package_vec.iter().enumerate() {
-            if let Some(idx) = selected_index {
-                if i != idx {
-                    continue;
-                }
-            }
-            
-            //=-- Print version and check availability
-            let is_available = match get_package_version_string(package) {
-                Ok(version_string) => {
-                    println!("{}", version_string);
-                    true
+            let settings: Settings = Config::builder()
+                //=-- Override with local Config.toml next to executable
+                .add_source(config::File::with_name(config_path.to_str().unwrap()).required(false))
+                //=-- Add environment variable source with prefix WBTL
+                .add_source(config::Environment::with_prefix("WBTL").separator("__"))
+                  //=-- Ex: WBTL_ARCHIVE__NANAZIP_EXE=path/to/nanazip.exe
+                  //=-- Ex: WBTL_PACKAGES__MYPACKAGE__OUTPUT_PATH=path/to/output
+                .build()
+                .unwrap()
+                .try_deserialize()
+                .unwrap();
+
+            //=-- Get NanaZip path from config and resolve it relative to the executable directory
+            let nanazip_relative_path = settings.archive.get("nanazip_exe")
+                .expect("nanazip_exe not found in config");
+            let nanazip_path = config_dir.join(nanazip_relative_path);
+
+            //=-- Resolve output root path
+            let output_root = match resolve_output_root(config_dir, &settings) {
+                Some(path) => path,
+                None => return Ok(()),
+            };
+            println!("Using output root: {}", output_root.display());
+
+            //=-- Check version
+            let local_version = get_local_version(config_dir).unwrap_or(None);
+            let remote_version_str = get_version(&settings.main.get("version_url").expect("version_url not found in config")).unwrap_or_default();
+            let remote_version = Version::parse(&remote_version_str).unwrap();
+
+            match local_version {
+                Some(local) => {
+                    if local < remote_version {
+                        println!("WarpBits Tools Loader is out of date, please download the new version: {}", remote_version.verdate_to_string());
+                        if !prompt_continue_or_quit() {
+                            return Ok(());
+                        }
+                    } else if local > remote_version {
+                        println!("WarpBits Tools Loader's version is in the future.\nYou may want to download a fresh copy.\nCurrent: {}. Remote: {}", 
+                            local.verdate_to_string(), remote_version.verdate_to_string());
+                        if !prompt_continue_or_quit() {
+                            return Ok(());
+                        }
+                    } else {
+                        println!("WarpBits Tools Loader is up to date, running version: {}", local.verdate_to_string());
+                    }
                 },
-                Err(e) => {
-                    println!("{} is not available:\n  {}", package.name, e);
-                    false
+                None => {
+                    println!("WarpBits Tools Loader version file not found, please download a fresh copy. Remote version: {}", remote_version.verdate_to_string());
+                    if !prompt_continue_or_quit() {
+                        return Ok(());
+                    }
+                }
+            }
+
+            //=-- Convert the packages to a sorted vec (root packages first, then alphabetical)
+            let mut package_vec: Vec<(&String, &Package)> = settings.packages.iter().collect();
+            package_vec.sort_by(|a, b| {
+                if a.1.is_root == b.1.is_root {
+                    //#-- If both are root or both are not root, sort by name
+                    a.1.name.cmp(&b.1.name)
+                } else {
+                    //#-- If one is root and the other isn't, root comes first
+                    b.1.is_root.cmp(&a.1.is_root)
+                }
+            });
+
+            if package_vec.is_empty() {
+                println!("No packages found in config!");
+                return Ok(());
+            }
+
+            let selected_index = loop {
+                //=-- Display numbered list
+                println!("\nAvailable packages:");
+                println!("A. All packages");
+                for (i, (_, package)) in package_vec.iter().enumerate() {
+                    println!("{}. {}: {}", i + 1, package.name, package.description);
+                }
+                println!("E. Exit");
+
+                //=-- Get user input from the console
+                print!("\nSelect a package number (A for all, E to exit): ");
+                io::stdout().flush().unwrap();
+                let mut buffer = String::new();
+                io::stdin().read_line(&mut buffer).unwrap();
+                
+                let input = buffer.trim();
+                
+                //=-- Parse selection
+                if input.eq_ignore_ascii_case("e") || input.eq_ignore_ascii_case("exit") {
+                    return Ok(());
+                } else if input.eq_ignore_ascii_case("a") || input.eq_ignore_ascii_case("all") {
+                    break None; //=-- All packages = None
+                } else {
+                    //=-- Parse and validate number, handling cases like "1." or "1.0"
+                    match input.split('.').next().and_then(|s| s.parse::<usize>().ok()) {
+                        Some(n) if n > 0 && n <= package_vec.len() => {
+                            break Some(n - 1);
+                        }
+                        _ => {
+                            println!("Invalid selection! ({})", input);
+                            continue;
+                        }
+                    }
                 }
             };
 
-            //=-- Only proceed with file listing if version was available
-            if is_available {
-                //=-- Get and print files
-                println!("\n{} ({}) files:", package.name, package.id);
-                match get_package_files(package) {
-                    Ok(files) => {
-                        let repo_url = if package.repo_url.ends_with('/') {
-                            package.repo_url.clone()
-                        } else {
-                            format!("{}\\", package.repo_url)
-                        };
-                        
-                        let package_dl_dir = dl_dir.join(&package.id);
-                        let package_output_dir = output_root.join(&package.output_path);
+            //=-- Process selected package(s)
+            println!("\n{}:", if selected_index.is_some() { "Package" } else { "Packages" });
+            for (i, (_, package)) in package_vec.iter().enumerate() {
+                if let Some(idx) = selected_index {
+                    if i != idx {
+                        continue;
+                    }
+                }
+                
+                //=-- Print version and check availability
+                let is_available = match get_package_version_string(package) {
+                    Ok(version_string) => {
+                        println!("{}", version_string);
+                        true
+                    },
+                    Err(e) => {
+                        println!("{} is not available:\n  {}", package.name, e);
+                        false
+                    }
+                };
 
-                        //=-- Get and check version before downloading files
-                        let version = match get_version(&package.version_url) {
-                            Ok(v) => match Version::parse(&v) {
-                                Ok(parsed) => parsed,
-                                Err(e) => {
-                                    println!("Failed to parse version: {}", e);
-                                    continue;
-                                }
-                            },
-                            Err(e) => {
-                                println!("Failed to get version: {}", e);
-                                continue;
-                            }
-                        };
-
-                        //=-- Check current version and prompt if needed
-                        let current_version = match get_current_version(&package_output_dir) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                println!("Failed to read current version: {}", e);
-                                None
-                            }
-                        };
-
-                        match should_update_package(current_version.as_ref(), &version) {
-                            Ok(true) => {
-                                if let Some(current) = &current_version {
-                                    if current > &version {
-                                        println!("Downgrading to version: {}", version.verdate_to_string());
-                                    } else {
-                                        println!("Updating to version: {}", version.verdate_to_string());
-                                    }
-                                } else {
-                                    println!("Installing version: {}", version.verdate_to_string());
-                                }
-                            },
-                            Ok(false) => {
-                                println!("Skipping package update");
-                                continue;
-                            },
-                            Err(e) => {
-                                println!("Error checking version: {}", e);
-                                continue;
-                            }
-                        };
-                        
-                        for file in files {
-                            let file_url = format!("{}{}", repo_url, file);
-                            println!("{}", file_url);
-                            
-                            //=-- Transform filename and download
-                            if let Some(new_filename) = transform_filename(&file) {
-                                let target_path = package_dl_dir.join(&new_filename);
-                                match download_file(&file_url, &target_path) {
-                                    Ok(_) => println!("Downloaded as: {}", new_filename),
-                                    Err(e) => println!("Error downloading {}: {}", file, e),
-                                }
+                //=-- Only proceed with file listing if version was available
+                if is_available {
+                    //=-- Get and print files
+                    println!("\n{} ({}) files:", package.name, package.id);
+                    match get_package_files(package) {
+                        Ok(files) => {
+                            let repo_url = if package.repo_url.ends_with('/') {
+                                package.repo_url.clone()
                             } else {
-                                println!("Error: Could not transform filename: {}", file);
-                            }
-                        }
-
-                        //=-- Handle output directory before starting extraction attempts
-                        if let Err(e) = handle_output_dir(&package_output_dir, package) {
-                            println!("Error preparing output directory: {}", e);
-                            continue;
-                        }
-
-                        //=-- Prompt for password and handle retries
-                        let mut retry_mode = false;
-                        let mut last_password = String::new();
-                        
-                        loop {
-                            let current_password = if !package.password.is_empty() && !retry_mode {
-                                &package.password
-                            } else if retry_mode {
-                                print!("\nEnter password for extraction (press Enter [on a blank entry] to skip this package): ");
-                                io::stdout().flush().unwrap();
-                                let mut buffer = String::new();
-                                io::stdin().read_line(&mut buffer).unwrap();
-                                let password = buffer.trim();
-                                if password.is_empty() {
-                                    println!("Skipping package due to empty password");
-                                    break;
-                                }
-                                last_password = password.to_string();
-                                &last_password
-                            } else if !last_password.is_empty() {
-                                print!("\nEnter password for extraction (press Enter [on a blank entry] to use previous password): ");
-                                io::stdout().flush().unwrap();
-                                let mut buffer = String::new();
-                                io::stdin().read_line(&mut buffer).unwrap();
-                                let password = buffer.trim();
-                                if !password.is_empty() {
-                                    last_password = password.to_string();
-                                }
-                                &last_password
-                            } else {
-                                print!("\nEnter password for extraction: ");
-                                io::stdout().flush().unwrap();
-                                let mut buffer = String::new();
-                                io::stdin().read_line(&mut buffer).unwrap();
-                                let password = buffer.trim();
-                                if password.is_empty() {
-                                    println!("Skipping package due to empty password");
-                                    break;
-                                }
-                                last_password = password.to_string();
-                                &last_password
+                                format!("{}\\", package.repo_url)
                             };
+                            
+                            let package_dl_dir = dl_dir.join(&package.id);
+                            let package_output_dir = output_root.join(&package.output_path);
 
-                            //=-- Extract archives
-                            match extract_archives(&nanazip_path, &package_dl_dir, &package_output_dir, current_password) {
-                                Ok(_) => {
-                                    println!("Successfully extracted archives");
-                                    break; //=-- Exit password retry loop on success
-                                },
-                                Err(e) => {
-                                    println!("Error during extraction: {}", e);
-                                    if !package.password.is_empty() && !retry_mode {
-                                        println!("Password from config failed, falling back to manual entry");
-                                        retry_mode = true;
-                                        last_password.clear(); //=-- Clear last password to force a new prompt
+                            //=-- Get and check version before downloading files
+                            let version = match get_version(&package.version_url) {
+                                Ok(v) => match Version::parse(&v) {
+                                    Ok(parsed) => parsed,
+                                    Err(e) => {
+                                        println!("Failed to parse version: {}", e);
                                         continue;
                                     }
-                                    retry_mode = true;
+                                },
+                                Err(e) => {
+                                    println!("Failed to get version: {}", e);
                                     continue;
                                 }
+                            };
+
+                            //=-- Check current version and prompt if needed
+                            let current_version = match get_current_version(&package_output_dir) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    println!("Failed to read current version: {}", e);
+                                    None
+                                }
+                            };
+
+                            match should_update_package(current_version.as_ref(), &version) {
+                                Ok(true) => {
+                                    if let Some(current) = &current_version {
+                                        if current > &version {
+                                            println!("Downgrading to version: {}", version.verdate_to_string());
+                                        } else {
+                                            println!("Updating to version: {}", version.verdate_to_string());
+                                        }
+                                    } else {
+                                        println!("Installing version: {}", version.verdate_to_string());
+                                    }
+                                },
+                                Ok(false) => {
+                                    println!("Skipping package update");
+                                    continue;
+                                },
+                                Err(e) => {
+                                    println!("Error checking version: {}", e);
+                                    continue;
+                                }
+                            };
+                            
+                            for file in files {
+                                let file_url = format!("{}{}", repo_url, file);
+                                println!("{}", file_url);
+                                
+                                //=-- Transform filename and download
+                                if let Some(new_filename) = transform_filename(&file) {
+                                    let target_path = package_dl_dir.join(&new_filename);
+                                    match download_file(&file_url, &target_path) {
+                                        Ok(_) => println!("Downloaded as: {}", new_filename),
+                                        Err(e) => println!("Error downloading {}: {}", file, e),
+                                    }
+                                } else {
+                                    println!("Error: Could not transform filename: {}", file);
+                                }
                             }
-                        }
 
-                        //=-- Save version file after all archives are successfully extracted
-                        if let Err(e) = save_version_file(&version, &package_output_dir) {
-                            println!("Warning: Failed to save version file: {}", e);
-                        }
+                            //=-- Handle output directory before starting extraction attempts
+                            if let Err(e) = handle_output_dir(&package_output_dir, package) {
+                                println!("Error preparing output directory: {}", e);
+                                continue;
+                            }
 
-                        //=-- Clean up downloaded files
-                        if let Err(e) = cleanup_package_dir(&package_dl_dir) {
-                            println!("Error cleaning up package directory: {}", e);
-                        }
-                    },
-                    Err(e) => println!("Error fetching file list:\n {}", e),
+                            //=-- Prompt for password and handle retries
+                            let mut retry_mode = false;
+                            let mut last_password = String::new();
+                            
+                            loop {
+                                let current_password = if !package.password.is_empty() && !retry_mode {
+                                    &package.password
+                                } else if retry_mode {
+                                    print!("\nEnter password for extraction (press Enter [on a blank entry] to skip this package): ");
+                                    io::stdout().flush().unwrap();
+                                    let mut buffer = String::new();
+                                    io::stdin().read_line(&mut buffer).unwrap();
+                                    let password = buffer.trim();
+                                    if password.is_empty() {
+                                        println!("Skipping package due to empty password");
+                                        break;
+                                    }
+                                    last_password = password.to_string();
+                                    &last_password
+                                } else if !last_password.is_empty() {
+                                    print!("\nEnter password for extraction (press Enter [on a blank entry] to use previous password): ");
+                                    io::stdout().flush().unwrap();
+                                    let mut buffer = String::new();
+                                    io::stdin().read_line(&mut buffer).unwrap();
+                                    let password = buffer.trim();
+                                    if !password.is_empty() {
+                                        last_password = password.to_string();
+                                    }
+                                    &last_password
+                                } else {
+                                    print!("\nEnter password for extraction: ");
+                                    io::stdout().flush().unwrap();
+                                    let mut buffer = String::new();
+                                    io::stdin().read_line(&mut buffer).unwrap();
+                                    let password = buffer.trim();
+                                    if password.is_empty() {
+                                        println!("Skipping package due to empty password");
+                                        break;
+                                    }
+                                    last_password = password.to_string();
+                                    &last_password
+                                };
+
+                                //=-- Extract archives
+                                match extract_archives(&nanazip_path, &package_dl_dir, &package_output_dir, current_password) {
+                                    Ok(_) => {
+                                        println!("Successfully extracted archives");
+                                        break; //=-- Exit password retry loop on success
+                                    },
+                                    Err(e) => {
+                                        println!("Error during extraction: {}", e);
+                                        if !package.password.is_empty() && !retry_mode {
+                                            println!("Password from config failed, falling back to manual entry");
+                                            retry_mode = true;
+                                            last_password.clear(); //=-- Clear last password to force a new prompt
+                                            continue;
+                                        }
+                                        retry_mode = true;
+                                        continue;
+                                    }
+                                }
+                            }
+
+                            //=-- Save version file after all archives are successfully extracted
+                            if let Err(e) = save_version_file(&version, &package_output_dir) {
+                                println!("Warning: Failed to save version file: {}", e);
+                            }
+
+                            //=-- Clean up downloaded files
+                            if let Err(e) = cleanup_package_dir(&package_dl_dir) {
+                                println!("Error cleaning up package directory: {}", e);
+                            }
+                        },
+                        Err(e) => println!("Error fetching file list:\n {}", e),
+                    }
                 }
+                
+                println!(); //=-- Add a blank line between packages
+            }
+
+            //=-- Clean up main download directory
+            if let Err(e) = cleanup_package_dir(&dl_dir) {
+                println!("Error cleaning up download directory: {}", e);
+            }
+            println!("Tools loading jobs completed.\nPress Enter to exit, or type \"start\" to restart...");
+            let mut buffer = String::new();
+            io::stdin().read_line(&mut buffer).unwrap();
+            
+            if !buffer.trim().eq_ignore_ascii_case("start") {
+                break;
             }
             
-            println!(); //=-- Add a blank line between packages
+            println!("\n=== Restarting Program ===\n");
         }
+        Ok(())
+    })();
 
-        //=-- Clean up main download directory
-        if let Err(e) = cleanup_package_dir(&dl_dir) {
-            println!("Error cleaning up download directory: {}", e);
-        }
-        println!("Tools loading jobs completed.\nPress Enter to exit, or type \"start\" to restart...");
-        let mut buffer = String::new();
-        io::stdin().read_line(&mut buffer).unwrap();
-        
-        if !buffer.trim().eq_ignore_ascii_case("start") {
-            break;
-        }
-        
-        println!("\n=== Restarting Program ===\n");
+    //=-- Clean up temp directory before exiting
+    if let Err(e) = cleanup_temp_dir(&temp_dir) {
+        eprintln!("Failed to clean up temporary directory: {}", e);
+    }
+
+    if let Err(e) = result {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
     }
 }

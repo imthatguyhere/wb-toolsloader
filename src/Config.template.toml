@@ -1,6 +1,7 @@
 [main]
 version_url = "https://raw.githubusercontent.com/imthatguyhere/wb-toolsloader/refs/heads/main/version.txt"
 output_root = "" #=-- The Output Root Directory that the package output path will build off of
+temp_dir = "" #=-- The Temporary Directory that the packages will be downloaded to, and extracted from
 
 #=-- Archive Handling Configuration
 [archive]
