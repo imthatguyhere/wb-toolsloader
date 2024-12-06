@@ -222,7 +222,11 @@ fn extract_archives(nanazip_path: &Path, package_dir: &Path, output_dir: &Path, 
                     for entry in fs::read_dir(&extract_dir)? {
                         let entry = entry?;
                         let target_path = output_dir.join(entry.file_name());
-                        fs::rename(entry.path(), target_path)?;
+                        // Try rename first, if it fails due to cross-device link, fallback to copy+remove
+                        if fs::rename(&entry.path(), &target_path).is_err() {
+                            fs::copy(&entry.path(), &target_path)?;
+                            fs::remove_file(&entry.path())?;
+                        }
                     }
                     println!("Moved files to {}", output_dir.display());
 
