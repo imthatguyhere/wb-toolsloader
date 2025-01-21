@@ -219,14 +219,62 @@ fn extract_archives(nanazip_path: &Path, package_dir: &Path, output_dir: &Path, 
 
                     //=-- Move extracted files to output directory
                     fs::create_dir_all(output_dir)?;
+                    let normalized_output_dir = normalize_path_buf(output_dir)
+                        .map_err(|e| format!("Failed to normalize output path {}: {}", output_dir.display(), e))?;
+                    
+                    println!("Normalized output directory: {}", normalized_output_dir.display());
+                    
                     for entry in fs::read_dir(&extract_dir)? {
                         let entry = entry?;
-                        let target_path = output_dir.join(entry.file_name());
-                        // Try rename first, if it fails due to cross-device link, fallback to copy+remove
-                        if fs::rename(&entry.path(), &target_path).is_err() {
-                            fs::copy(&entry.path(), &target_path)?;
-                            fs::remove_file(&entry.path())?;
+                        let source_path = entry.path();
+                        let target_path = normalized_output_dir.join(entry.file_name());
+                        
+                        println!("Processing: {} -> {}", source_path.display(), target_path.display());
+                        
+                        //=-- If target exists, try to remove it first
+                        if target_path.exists() {
+                            if target_path.is_dir() {
+                                retry_file_operation(
+                                    || fs::remove_dir_all(&target_path).map_err(|e| Box::new(e) as Box<dyn std::error::Error>),
+                                    3,
+                                    100
+                                ).map_err(|e| format!("Failed to remove existing directory {}: {}", target_path.display(), e))?;
+                            } else {
+                                retry_file_operation(
+                                    || fs::remove_file(&target_path).map_err(|e| Box::new(e) as Box<dyn std::error::Error>),
+                                    3,
+                                    100
+                                ).map_err(|e| format!("Failed to remove existing file {}: {}", target_path.display(), e))?;
+                            }
                         }
+                        
+                        //=-- Try to move the file with retries
+                        retry_file_operation(
+                            || {
+                                if source_path.is_dir() {
+                                    match fs::rename(&source_path, &target_path) {
+                                        Ok(()) => Ok(()),
+                                        Err(_) => {
+                                            // For directories, try copy_dir_all if rename fails
+                                            copy_dir_all(&source_path, &target_path)
+                                                .and_then(|_| fs::remove_dir_all(&source_path))
+                                                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+                                        }
+                                    }
+                                } else {
+                                    match fs::rename(&source_path, &target_path) {
+                                        Ok(()) => Ok(()),
+                                        Err(_) => {
+                                            fs::copy(&source_path, &target_path)
+                                                .and_then(|_| fs::remove_file(&source_path))
+                                                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+                                        }
+                                    }
+                                }
+                            },
+                            3,
+                            100
+                        ).map_err(|e| format!("Failed to move {} to {}: {}", source_path.display(), target_path.display(), e))?;
                     }
                     println!("Moved files to {}", output_dir.display());
 
@@ -361,14 +409,76 @@ fn cleanup_temp_dir(dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn main() {
+use std::thread;
+use std::time::Duration;
+
+fn retry_file_operation<F, T>(mut operation: F, retries: u32, delay_ms: u64) -> Result<T, Box<dyn std::error::Error>>
+where
+    F: FnMut() -> Result<T, Box<dyn std::error::Error>>,
+{
+    let mut last_error = None;
+    for _ in 0..retries {
+        match operation() {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                last_error = Some(e);
+                thread::sleep(Duration::from_millis(delay_ms));
+            }
+        }
+    }
+    Err(last_error.unwrap())
+}
+
+// Helper function to recursively copy directories
+fn copy_dir_all(src: &Path, dst: &Path) -> io::Result<()> {
+    if !dst.exists() {
+        fs::create_dir_all(dst)?;
+    }
+
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let source = entry.path();
+        let destination = dst.join(entry.file_name());
+
+        if ty.is_dir() {
+            copy_dir_all(&source, &destination)?;
+        } else {
+            fs::copy(&source, &destination)?;
+        }
+    }
+    Ok(())
+}
+
+fn normalize_path_buf(path: &Path) -> io::Result<PathBuf> {
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                if !components.is_empty() {
+                    components.pop();
+                }
+            },
+            std::path::Component::Normal(name) => components.push(name),
+            std::path::Component::RootDir => components.push(component.as_os_str()),
+            std::path::Component::Prefix(prefix) => components.push(prefix.as_os_str()),
+            _ => {}
+        }
+    }
+    let mut result = PathBuf::new();
+    for component in components {
+        result.push(component);
+    }
+    Ok(result)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = resolve_temp_dir(&Settings {
         archive: HashMap::new(),
         packages: IndexMap::new(),
         main: HashMap::new(),
     });
 
-    //=-- Create a result that we'll use to track if we need to clean up
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
         loop {
             let exe_path = std::env::current_exe().expect("Failed to get executable path");
@@ -686,13 +796,17 @@ fn main() {
         Ok(())
     })();
 
-    //=-- Clean up temp directory before exiting
+    //=-- Clean up temp directory before handling the result
     if let Err(e) = cleanup_temp_dir(&temp_dir) {
         eprintln!("Failed to clean up temporary directory: {}", e);
     }
 
-    if let Err(e) = result {
-        eprintln!("Error: {}", e);
-        std::process::exit(1);
+    //=-- Now handle any errors from the main operation
+    match result {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
     }
 }
